@@ -1,10 +1,26 @@
-# package_swift_ecdh
+# package-swift-ecdhp256
 
-This Swift Package combines the Ecdh P256 C library with a Swift wrapper class (EcdhP256) to provide out-of-the-box integration. Unit testing is also included.
+This Swift Package combines the Ecdh P256 C language library with a Swift wrapper class (EcdhP256) to provide out-of-the-box integration. Unit testing is also included.
+
+## Full Code and Documentation
+In addition to the code and documentation provided here, the complete codebase, including wrapper classes for many other languages, and complete documentation can be found at https://github.com/Eclypses/package-mtesupport-ecdh.git.
+
+
+## Implement Package
+1. Create or open your host application
+2. In the Project Navigator, select the project root, and then, select the project in the editor, rather than the Target, then the 'Package dependencies' tab.
+3. Click the '+' symbol to add a new package.
+4. In the Search box paste this URL https://github.com/Eclypses/package-swift-ecdhp256.git
+5. Select this master branch and click 'Add Package'.
+6. The package will show up within a 'Packages' directory in the Project Navigator.
+7. Select the root in the Project Navigator again, select your Target in the Editor, then the 'General' tab and scroll down to 'Frameworks, Libraries and Embedded Content'.
+8. Add EcdhP256 if it's not already there.
+9. In any class where you wish to use the publicly accessible properties and functions of EcdhP256, import it. 
+10. You will likely also need to import EcdhLib to make use of its Enums and properties.
+
 
 ## Local Implementation
-
-We currently (Feb 2023) don't have a publicly-accessible package repo but this package can still be cloned and used locally.
+This package can also be cloned and used locally.
 
 1. Clone this package.
 2. Create or open your host application
@@ -26,16 +42,16 @@ import EcdhP256
 
 class Manager: ObservableObject, EcdhEntropyCallback {
     
-    func copySecRndBytes(_ entropyInput: inout [UInt8],
+    func getRandom(_ entropyInput: inout [UInt8],
                          _ eiBytes: Int) -> Int32 {
-        debugPrint("Using Random Byte Generator in EcdhHelper")
+        debugPrint("Using \(#function) in \(type(of: self))")
         let status = SecRandomCopyBytes(
             kSecRandomDefault,
             eiBytes,
             &entropyInput
         )
         if status != errSecSuccess {
-            debugPrint("Error getting secure random bytes. Error Code: \(status)")
+            debugPrint("Error using \(#function) in \(type(of: self)). Error Code: \(status)")
             return ECDH_P256_RANDOM_FAIL
         }
         return ECDH_P256_SUCCESS
@@ -47,30 +63,41 @@ class Manager: ObservableObject, EcdhEntropyCallback {
     var localSharedSecret: [UInt8]!
     var remoteSharedSecret: [UInt8]!
     
-    var ecdhHelperLocal: EcdhP256!
-    var ecdhHelperRemote: EcdhP256!
+    var ecdhP256Local: EcdhP256!
+    var ecdhP256Remote: EcdhP256!
     
     init() {
-        initializeEcdhHelpers()
+        initializeEcdh()
     }
     
-    func initializeEcdhHelpers() {
+    func initializeEcdh() {
         print("\n\nBeginning ECDH Test Sequence")
         do {
-            ecdhHelperLocal = try EcdhP256(name: "Local")
+            ecdhP256Local = try EcdhP256(name: "Local")
 //            ecdhHelperLocal.setEntropyCallback(self) // Commented out to demonstrate retrieving Random Bytes from EcdhHelper
-            ecdhHelperRemote = try EcdhP256(name: "Remote")
-            ecdhHelperRemote.setEntropyCallback(self)
+            ecdhP256Remote = try EcdhP256(name: "Remote")
+            ecdhP256Remote.setEntropyCallback(self)
         } catch {
-            print("EcdhHelper init failed. Error: \(error.localizedDescription)")
+            print("Error using \(#function) in \(type(of: self)). Error: \(error.localizedDescription)")
         }
     }
     
     
     func test() -> Bool {
+        let nt = NISTTestVectors()
+        var status = EcdhP256.ResultCodes.success
+        do {
+            status = try nt.runNistTests()
+        } catch {
+            print("NIST Testing failed. Status: \(status). Error: \(error.localizedDescription)")
+        }
+        print("NISTTestVectors status: \(status)")
+        if status != EcdhP256.ResultCodes.success {
+            return false
+        }
         defer {
-            ecdhHelperLocal = nil
-            ecdhHelperRemote = nil
+            ecdhP256Local = nil
+            ecdhP256Remote = nil
         }
         
         getLocalPublicKey()
@@ -82,45 +109,47 @@ class Manager: ObservableObject, EcdhEntropyCallback {
     
         
     private func getLocalPublicKey() {
-        do {
-            localPublicKey = try ecdhHelperLocal.getLocalPublicKey()
-        } catch {
-            print("Error getting local public key. Error: \(error.localizedDescription)")
+        var result: (status:Int , publicKey:[UInt8]?)
+        result = ecdhP256Local.createKeyPair()
+        if result.status != EcdhP256.ResultCodes.success {
+            print("Error getting local public key. Status: \(result.status)")
+            return
         }
+        localPublicKey = result.publicKey
     }
     
     
     private func getRemotePublicKey() {
-        do {
-            remotePublicKey = try ecdhHelperRemote.getLocalPublicKey()
-        } catch {
-            print("Error getting remote public key. Error: \(error.localizedDescription)")
+        var result: (status:Int, publicKey:[UInt8]?)
+        result = ecdhP256Remote.createKeyPair()
+        if result.status != EcdhP256.ResultCodes.success {
+            print("Error getting remote public key. Status: \(result.status)")
+            return
         }
+        remotePublicKey = result.publicKey
     }
     
     private func createLocalSharedSecret() {
-        do {
-            localSharedSecret = [UInt8]()
-            try ecdhHelperLocal.createSharedSecret(remotePublicKeyBytes: remotePublicKey, entropyBuffer: &localSharedSecret)
-        } catch {
-            print("Error creating local shared secret. Error: \(error.localizedDescription)")
+        localSharedSecret = [UInt8]()
+        let status = ecdhP256Local.getSharedSecret(remotePublicKeyBytes: remotePublicKey, entropyBuffer: &localSharedSecret)
+        if status != EcdhP256.ResultCodes.success {
+            print("Error getting local Shared Secret. Status: \(status)")
+            return
         }
     }
     
     private func createRemoteSharedSecret() {
-        do {
-            remoteSharedSecret = [UInt8]()
-            try ecdhHelperRemote.createSharedSecret(remotePublicKeyBytes: localPublicKey, entropyBuffer: &remoteSharedSecret)
-        } catch {
-            print("Error creating remote shared secret. Error: \(error.localizedDescription)")
+        remoteSharedSecret = [UInt8]()
+        let status = ecdhP256Remote.getSharedSecret(remotePublicKeyBytes: localPublicKey, entropyBuffer: &remoteSharedSecret)
+        if status != EcdhP256.ResultCodes.success {
+            print("Error getting remote Shared Secret. Status: \(status)")
+            return
         }
     }
     
     func compareSharedSecrets() -> Bool {
         return remoteSharedSecret == localSharedSecret
     }
-    
-    
     
 }
 

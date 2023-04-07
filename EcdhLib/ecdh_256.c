@@ -31,6 +31,8 @@
  *
  * https://github.com/mpg/p256-m
  *******************************************************************************/
+#include "platform.h"
+
 #include <string.h>
 
 #include "mtesupport_ecdh.h"
@@ -178,21 +180,6 @@ static uint32_t u256_diff(const uint32_t x[8], const uint32_t y[8]) {
 
 
 
-/**************************************************
- * 256-bit compare to zero
- *
- * in: x in [0, 2^256)
- * out: 0 if x == 0, unspecified non-zero otherwise
- **************************************************/
-static uint32_t u256_diff0(const uint32_t x[8]) {
-  uint32_t diff = 0;
-  for (unsigned i = 0; i < 8; i++)
-    diff |= x[i];
-  return diff;
-}
-
-
-
 /****************************************************************************
  * 32 x 32 -> 64-bit multiply-and-accumulate
  *
@@ -202,143 +189,17 @@ static uint32_t u256_diff0(const uint32_t x[8]) {
  * Note: this computation cannot overflow.
  *
  * Note: this function has two pure-C implementations (depending on whether
- * MUL64_IS_CONSTANT_TIME), and possibly optimised asm implementations.
- * Start with the potential asm definitions, and use the C definition only if
- * we no have no asm for the current toolchain & CPU.
+ * MUL64_IS_CONSTANT_TIME).
  ****************************************************************************/
 static uint64_t u32_muladd64(uint32_t x, uint32_t y, uint32_t z, uint32_t t);
 
 
 
-/********************************************************************
- * This macro is used to mark whether an asm implementation is found.
- ********************************************************************/
-#undef MULADD64_ASM
-
-
-
-/*******************************************************************
- * This macro is used to mark whether the implementation has a small
- * code size (ie, it can be inlined even in an unrolled loop).
- *******************************************************************/
-#undef MULADD64_SMALL
-
-
-
-/***************************************************************************
- * Currently assembly optimisations are only supported with GCC/Clang for
- * Arm's Cortex-A and Cortex-M lines of CPUs, which start with the v6-M and
- * v7-M architectures. __ARM_ARCH_PROFILE is not defined for v6 and earlier.
- ***************************************************************************/
-#if defined(__GNUC__) && \
-    defined(__ARM_ARCH) && __ARM_ARCH >= 6 && defined(__ARM_ARCH_PROFILE) && \
-    ( __ARM_ARCH_PROFILE == 77 || __ARM_ARCH_PROFILE == 65 ) /* 'M' or 'A' */
-
-
-
-/***************************************************************************
- * This set of CPUs is conveniently partitioned as follows:
- *
- * 1. Cores that have the DSP extension, which includes a 1-cycle UMAAL
- *    instruction: M4, M7, M33, all A-class cores.
- * 2. Cores that don't have the DSP extension, and also lack a constant-time
- *    64-bit multiplication instruction:
- *    - M0, M0+, M23: 32-bit multiplication only;
- *    - M3: 64-bit multiplication is not constant-time.
- ***************************************************************************/
-#if defined(__ARM_FEATURE_DSP)
-
-static uint64_t u32_muladd64(uint32_t x, uint32_t y, uint32_t z, uint32_t t) {
-  __asm__(
-    /* UMAAL <RdLo>, <RdHi>, <Rn>, <Rm> */
-    "umaal %[z], %[t], %[x], %[y]"
-    : [z] "+l" (z), [t] "+l" (t)
-    : [x] "l" (x), [y] "l" (y)
-  );
-  return ((uint64_t) t << 32) | z;
-}
-#define MULADD64_ASM
-#define MULADD64_SMALL
-
-#else /* __ARM_FEATURE_DSP */
-
-/*************************************************************
- * This implementation only uses 16x16->32 bit multiplication.
- *
- * It decomposes the multiplicands as:
- *      x = xh:xl = 2^16 * xh + xl
- *      y = yh:yl = 2^16 * yh + yl
- * and computes their product as:
- *      x*y = xl*yl + 2**16 (xh*yl + yl*yh) + 2**32 xh*yh
- * then adds z and t to the result.
- *************************************************************/
-static uint64_t u32_muladd64(uint32_t x, uint32_t y, uint32_t z, uint32_t t) {
-  /* First compute x*y, using 3 temporary registers */
-  uint32_t tmp1, tmp2, tmp3;
-  __asm__(
-    ".syntax unified\n\t"
-    /* start by splitting the inputs into halves */
-    "lsrs    %[u], %[x], #16\n\t"
-    "lsrs    %[v], %[y], #16\n\t"
-    "uxth    %[x], %[x]\n\t"
-    "uxth    %[y], %[y]\n\t"
-    /* now we have %[x], %[y], %[u], %[v] = xl, yl, xh, yh */
-    /* let's compute the 4 products we can form with those */
-    "movs    %[w], %[v]\n\t"
-    "muls    %[w], %[u]\n\t"
-    "muls    %[v], %[x]\n\t"
-    "muls    %[x], %[y]\n\t"
-    "muls    %[y], %[u]\n\t"
-    /* now we have %[x], %[y], %[v], %[w] = xl*yl, xh*yl, xl*yh, xh*yh */
-    /* let's split and add the first middle product */
-    "lsls    %[u], %[y], #16\n\t"
-    "lsrs    %[y], %[y], #16\n\t"
-    "adds    %[x], %[u]\n\t"
-    "adcs    %[y], %[w]\n\t"
-    /* let's finish with the second middle product */
-    "lsls    %[u], %[v], #16\n\t"
-    "lsrs    %[v], %[v], #16\n\t"
-    "adds    %[x], %[u]\n\t"
-    "adcs    %[y], %[v]\n\t"
-    : [x] "+l" (x), [y] "+l" (y),
-      [u] "=&l" (tmp1), [v] "=&l" (tmp2), [w] "=&l" (tmp3)
-    : /* no read-only inputs */
-    : "cc"
-  );
-  (void) tmp1;
-  (void) tmp2;
-  (void) tmp3;
-
-  /* Add z and t, using one temporary register */
-  __asm__(
-    ".syntax unified\n\t"
-    "movs    %[u], #0\n\t"
-    "adds    %[x], %[z]\n\t"
-    "adcs    %[y], %[u]\n\t"
-    "adds    %[x], %[t]\n\t"
-    "adcs    %[y], %[u]\n\t"
-    : [x] "+l" (x), [y] "+l" (y), [u] "=&l" (tmp1)
-    : [z] "l" (z), [t] "l" (t)
-    : "cc"
-  );
-  (void) tmp1;
-  return ((uint64_t) y << 32) | x;
-}
-#define MULADD64_ASM
-
-#endif /* __ARM_FEATURE_DSP */
-
-#endif /* GCC/Clang with Cortex-M/A CPU */
-
-
-
-#if !defined(MULADD64_ASM)
 #if defined(MUL64_IS_CONSTANT_TIME)
 
 static uint64_t u32_muladd64(uint32_t x, uint32_t y, uint32_t z, uint32_t t) {
   return (uint64_t) x * y + z + t;
 }
-#define MULADD64_SMALL
 
 #else
 
@@ -356,14 +217,15 @@ static uint64_t u32_muladd64(uint32_t x, uint32_t y, uint32_t z, uint32_t t) {
   const uint32_t m2 = (uint32_t) xl * yh;
   const uint32_t hi = (uint32_t) xh * yh;
 
-  uint64_t acc = lo + ((uint64_t) (hi + (m1 >> 16) + (m2 >> 16)) << 32);
-#ifdef _MSC_VER
+  #ifdef _MSC_VER
   /* It is OK that we'll lose bits when we shift m1 and m2.
    * Unfortunately Visual C keeps complaining about it.
    * We turn off the warnings using #pragmas. */
 #pragma warning(push)
   #pragma warning(disable: 6297)
+  #pragma warning(disable: 26451)
 #endif
+  uint64_t acc = lo + ((uint64_t)(hi + (m1 >> 16) + (m2 >> 16)) << 32);
   acc += m1 << 16;
   acc += m2 << 16;
 #ifdef _MSC_VER
@@ -376,7 +238,6 @@ static uint64_t u32_muladd64(uint32_t x, uint32_t y, uint32_t z, uint32_t t) {
 }
 
 #endif /* MUL64_IS_CONSTANT_TIME */
-#endif /* MULADD64_ASM */
 
 
 
@@ -404,19 +265,8 @@ static uint32_t u288_muladd(uint32_t z[9], uint32_t x, const uint32_t y[8]) {
           carry = (uint32_t) (prod >> 32);                    \
         } while (0)
 
-#if defined(MULADD64_SMALL)
-  U288_MULADD_STEP(0);
-  U288_MULADD_STEP(1);
-  U288_MULADD_STEP(2);
-  U288_MULADD_STEP(3);
-  U288_MULADD_STEP(4);
-  U288_MULADD_STEP(5);
-  U288_MULADD_STEP(6);
-  U288_MULADD_STEP(7);
-#else
   for (unsigned i = 0; i < 8; i++)
     U288_MULADD_STEP(i);
-#endif
 
   uint64_t sum = (uint64_t) z[8] + carry;
   z[8] = (uint32_t) sum;
@@ -1033,45 +883,6 @@ static void point_add(uint32_t x1[8], uint32_t y1[8], uint32_t z1[8],
 
 
 
-/********************************************************************
- * Point addition or doubling (affine to jacobian, Montgomery domain)
- *
- * in: P = (x1, y1) - must be on the curve and not 0
- *     Q = (x2, y2) - must be on the curve and not 0
- * out: (x3, y3) = R = P + Q
- *
- * Note: unlike point_add(), this function works if P = +- Q;
- * however it leaks information on its input through timing,
- * branches taken and memory access patterns (if observable).
- ********************************************************************/
-static void point_add_or_double_leaky(
-            uint32_t x3[8], uint32_t y3[8],
-            const uint32_t x1[8], const uint32_t y1[8],
-            const uint32_t x2[8], const uint32_t y2[8]) {
-
-  uint32_t z3[8];
-  u256_cmov(x3, x1, 1);
-  u256_cmov(y3, y1, 1);
-  m256_set32(z3, 1, &p256_p);
-  if (u256_diff(x1, x2) != 0) {
-    /* P != +-Q -> generic addition */
-    point_add(x3, y3, z3, x2, y2);
-    point_to_affine(x3, y3, z3);
-  }
-  else if (u256_diff(y1, y2) == 0) {
-    /* P == Q -> double */
-    point_double(x3, y3, z3);
-    point_to_affine(x3, y3, z3);
-  }
-  else {
-    /* P == -Q->zero */
-    m256_set32(x3, 0, &p256_p);
-    m256_set32(y3, 0, &p256_p);
-  }
-}
-
-
-
 /***************************************************************************
  * Import curve point from bytes
  *
@@ -1274,7 +1085,6 @@ static int scalar_gen_with_pub(uint8_t sbytes[32], uint32_t s[8],
  ******************************************************************************/
 
 
-
 /********************************************************************************
  * ECDH/ECDSA generate key pair
  *
@@ -1285,24 +1095,23 @@ static int scalar_gen_with_pub(uint8_t sbytes[32], uint32_t s[8],
  * return:  ECDH_SUCCESS on success
  *          ECDH_RANDOM_FAILED on failure
  ********************************************************************************/
-int ecdh_p256_create_keypair(byte_array private_key,
-                             byte_array public_key,
+int ecdh_p256_create_keypair(byte_array *private_key,
+                             byte_array *public_key,
                              ecdh_p256_get_entropy entropy_cb,
                              void *entropy_context) {
   uint32_t s[8], x[8], y[8];
   int rc;
 
-  if ((private_key.size < SZ_ECDH_P256_PRIVATE_KEY) ||
-      (public_key.size < SZ_ECDH_P256_PUBLIC_KEY))
+  if ((private_key->size < SZ_ECDH_P256_PRIVATE_KEY) ||
+      (public_key->size < SZ_ECDH_P256_PUBLIC_KEY))
     return ECDH_P256_MEMORY_FAIL;
-
-  rc = scalar_gen_with_pub(private_key.data, s, x, y, entropy_cb, entropy_context);
+  rc = scalar_gen_with_pub(private_key->data, s, x, y, entropy_cb, entropy_context);
   ecdh_p256_zeroize(s, sizeof s);
   if (rc != 0)
     return ECDH_P256_RANDOM_FAIL;
-  point_to_bytes(public_key.data, x, y);
-  private_key.size = SZ_ECDH_P256_PRIVATE_KEY;
-  public_key.size = SZ_ECDH_P256_PUBLIC_KEY;
+  point_to_bytes(public_key->data, x, y);
+  private_key->size = SZ_ECDH_P256_PRIVATE_KEY;
+  public_key->size = SZ_ECDH_P256_PUBLIC_KEY;
   return ECDH_P256_SUCCESS;
 }
 
@@ -1321,14 +1130,14 @@ int ecdh_p256_create_keypair(byte_array private_key,
  ****************************************************************************/
 int ecdh_p256_create_secret(const byte_array private_key,
                             const byte_array peer_public_key,
-                            byte_array secret) {
+                            byte_array *secret) {
   CT_POISON(private_key, ECDH_PRIVATE_KEY_BYTES);
   uint32_t s[8], px[8], py[8], x[8], y[8];
   int rc;
 
   if ((private_key.size < SZ_ECDH_P256_PRIVATE_KEY) ||
       (peer_public_key.size < SZ_ECDH_P256_PUBLIC_KEY) ||
-      (secret.size < SZ_ECDH_P256_SECRET_DATA))
+      (secret->size < SZ_ECDH_P256_SECRET_DATA))
     return ECDH_P256_MEMORY_FAIL;
 
   rc = scalar_from_bytes(s, private_key.data);
@@ -1343,9 +1152,9 @@ int ecdh_p256_create_secret(const byte_array private_key,
     goto cleanup;
   }
   scalar_mult(x, y, px, py, s);
-  m256_to_bytes(secret.data, x, &p256_p);
+  m256_to_bytes(secret->data, x, &p256_p);
   CT_UNPOISON(secret, ECDH_SECRET_DATA_BYTES);
-  secret.size = SZ_ECDH_P256_SECRET_DATA;
+  secret->size = SZ_ECDH_P256_SECRET_DATA;
   rc = ECDH_P256_SUCCESS;
 
 cleanup:

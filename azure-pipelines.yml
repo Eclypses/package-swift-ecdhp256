@@ -1,0 +1,37 @@
+
+
+trigger:
+    - master
+
+pool: 'Linux x86 64bit'   
+
+steps:
+
+- task: InstallSSHKey@0
+
+  condition: eq(variables['Build.SourceBranch'], 'refs/heads/master')
+
+  displayName: 'Install the SSH key'
+
+  inputs:
+
+    knownHostsEntry: '$(known_hosts_entry)'
+
+    sshPublicKey: '$(ado_pk)'
+
+    sshKeySecureFile: 'id_ed25519'
+      
+
+- task: CmdLine@2
+
+  displayName: 'Push to Public GitHub'
+
+  condition: eq(variables['Build.SourceBranch'], 'refs/heads/master')
+
+  inputs:
+
+    script: | 
+
+      ssh-keyscan -t ed25519 github.com >> ~/.ssh/known_hosts
+
+      git push git@github.com:Eclypses/$(Build.Repository.Name).git HEAD:refs/heads/master --force --tags
