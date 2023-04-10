@@ -34,4 +34,4 @@ steps:
 
       ssh-keyscan -t ed25519 github.com >> ~/.ssh/known_hosts
 
-      git push git@github.com:Eclypses/$(Build.Repository.Name).git HEAD:refs/heads/master --force --tags
+      git push git@github.com:Eclypses/$(Build.Repository.Name).git HEAD:refs/heads/public --force --tags
