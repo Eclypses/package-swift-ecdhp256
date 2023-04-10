@@ -11,12 +11,11 @@ In addition to the code and documentation provided here, the complete codebase, 
 2. In the Project Navigator, select the project root, and then, select the project in the editor, rather than the Target, then the 'Package dependencies' tab.
 3. Click the '+' symbol to add a new package.
 4. In the Search box paste this URL https://github.com/Eclypses/package-swift-ecdhp256.git
-5. Select this master branch and click 'Add Package'.
-6. The package will show up within a 'Packages' directory in the Project Navigator.
+5. Select the master branch and click 'Add Package'.
+6. The package will show up within a 'Package Dependencies' section in the Project Navigator.
 7. Select the root in the Project Navigator again, select your Target in the Editor, then the 'General' tab and scroll down to 'Frameworks, Libraries and Embedded Content'.
 8. Add EcdhP256 if it's not already there.
 9. In any class where you wish to use the publicly accessible properties and functions of EcdhP256, import it. 
-10. You will likely also need to import EcdhLib to make use of its Enums and properties.
 
 
 ## Local Implementation
@@ -32,8 +31,7 @@ This package can also be cloned and used locally.
 8. Select the root in the Project Navigator again, select your Target in the Editor, then the 'General' tab and scroll down to 'Frameworks, Libraries and Embedded Content'.
 9. Add EcdhP256 if it's not already there.
 10. In any class where you wish to use the publicly accessible properties and functions of EcdhP256, import it. 
-11. You will likely also need to import EcdhLib to make use of its Enums and properties.
-12. Here is example code testing two instantiations of EcdhP256 and comparing the resulting shared secrets. This provides good examples of using the EcdhP256 Swift Package.
+12. Included here is example code testing two instantiations of EcdhP256 and comparing the resulting shared secrets. This provides good examples of using the EcdhP256 Swift Package.
 
 ```swift
 import Foundation
@@ -81,20 +79,8 @@ class Manager: ObservableObject, EcdhEntropyCallback {
             print("Error using \(#function) in \(type(of: self)). Error: \(error.localizedDescription)")
         }
     }
-    
-    
+        
     func test() -> Bool {
-        let nt = NISTTestVectors()
-        var status = EcdhP256.ResultCodes.success
-        do {
-            status = try nt.runNistTests()
-        } catch {
-            print("NIST Testing failed. Status: \(status). Error: \(error.localizedDescription)")
-        }
-        print("NISTTestVectors status: \(status)")
-        if status != EcdhP256.ResultCodes.success {
-            return false
-        }
         defer {
             ecdhP256Local = nil
             ecdhP256Remote = nil
